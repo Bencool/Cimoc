@@ -8,8 +8,8 @@ import android.content.pm.ActivityInfo;
 import android.graphics.Point;
 import android.net.Uri;
 import android.os.Build;
-import android.support.v7.widget.LinearLayoutManager;
-import android.support.v7.widget.RecyclerView;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -346,7 +346,7 @@ public abstract class ReaderActivity extends BaseActivity implements OnTapGestur
     public void onPicturePaging(ImageUrl image) {
         int pos = mReaderAdapter.getPositionById(image.getId());
         mReaderAdapter.add(pos + 1, new ImageUrl(image.getNum(), image.getUrls(),
-                image.getChapter(), ImageUrl.STATE_PAGE_2, false));
+                image.getChapter(), image.getState(), false));
     }
 
     @Override

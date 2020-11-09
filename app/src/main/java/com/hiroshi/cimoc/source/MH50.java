@@ -1,8 +1,8 @@
 package com.hiroshi.cimoc.source;
 
-import android.util.Base64;
 import android.util.Pair;
 
+import com.alibaba.fastjson.JSONArray;
 import com.google.common.collect.Lists;
 import com.hiroshi.cimoc.model.Chapter;
 import com.hiroshi.cimoc.model.Comic;
@@ -14,16 +14,17 @@ import com.hiroshi.cimoc.parser.NodeIterator;
 import com.hiroshi.cimoc.parser.SearchIterator;
 import com.hiroshi.cimoc.parser.UrlFilter;
 import com.hiroshi.cimoc.soup.Node;
+import com.hiroshi.cimoc.utils.DecryptionUtils;
+import com.hiroshi.cimoc.utils.HttpUtils;
 import com.hiroshi.cimoc.utils.StringUtils;
 
+import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.regex.Pattern;
 
 import javax.annotation.Nullable;
-import javax.crypto.Cipher;
-import javax.crypto.spec.IvParameterSpec;
-import javax.crypto.spec.SecretKeySpec;
 
 import okhttp3.Headers;
 import okhttp3.Request;
@@ -35,6 +36,7 @@ public class MH50 extends MangaParser {
 
     public static final int TYPE = 80;
     public static final String DEFAULT_TITLE = "漫画堆";
+    public static final String website = "https://www.manhuabei.com";
 
     public static Source getDefaultSource() {
         return new Source(null, DEFAULT_TITLE, TYPE, true);
@@ -46,29 +48,22 @@ public class MH50 extends MangaParser {
 
     @Override
     public Request getSearchRequest(String keyword, int page) {
-        if (page == 1) {
-            String url = StringUtils.format("https://m.manhuadui.com/search/?keywords=%s&page=%d", keyword, page);
-            return new Request.Builder()
-                    .addHeader("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 12_0 like Mac OS X) AppleWebKit/604.1.38 (KHTML, like Gecko) Version/12.0 Mobile/15A372 Safari/604.1")
-                    .url(url)
-                    .build();
-
-        }
-        return null;
+        String url = StringUtils.format("%s/search/?keywords=%s&page=%d", website, keyword, page);
+        return HttpUtils.getSimpleMobileRequest(url);
     }
 
     @Override
     public SearchIterator getSearchIterator(String html, int page) {
         Node body = new Node(html);
-        return new NodeIterator(body.list(".UpdateList > .itemBox")) {
+        return new NodeIterator(body.list("ul.list_con_li > li.list-comic")) {
             @Override
             protected Comic parse(Node node) {
-                String cid = node.hrefWithSplit(".itemTxt > a", 1);
-                String title = node.text(".itemTxt > a");
-                String cover = node.src(".itemImg > a > img");
+                String cid = node.hrefWithSplit("a", 1);
+                String title = node.attr("a","title");
+                String cover = node.src("img");
                 if (cover.startsWith("//")) cover = "https:" + cover;
-                String update = node.text(".itemTxt > p.txtItme:eq(3)");
-                String author = node.text(".itemTxt > p.txtItme:eq(1)");
+                String update = node.text("p.newPage");
+                String author = node.text("p.auth");
                 return new Comic(TYPE, cid, title, cover, update, author);
             }
         };
@@ -76,35 +71,30 @@ public class MH50 extends MangaParser {
 
     @Override
     public String getUrl(String cid) {
-        return StringUtils.format("https://www.manhuadui.com/manhua/%s/", cid);
+        return StringUtils.format("%s/manhua/%s/", website, cid);
     }
 
     @Override
     protected void initUrlFilterList() {
-        filter.add(new UrlFilter("m.manhuadui.com", "manhua\\/(\\w+)", 1));
-        filter.add(new UrlFilter("www.manhuadui.com", "manhua\\/(\\w+)", 1));
+        filter.add(new UrlFilter(website));
     }
-
 
     @Override
     public Request getInfoRequest(String cid) {
-        String url = StringUtils.format("https://m.manhuadui.com/manhua/%s/", cid);
-        return new Request.Builder()
-                .addHeader("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 12_0 like Mac OS X) AppleWebKit/604.1.38 (KHTML, like Gecko) Version/12.0 Mobile/15A372 Safari/604.1")
-                .url(url)
-                .build();
+        String url = StringUtils.format("%s/manhua/%s/", website, cid);
+        return HttpUtils.getSimpleMobileRequest(url);
     }
 
     @Override
     public void parseInfo(String html, Comic comic) {
         Node body = new Node(html);
-        String intro = body.text("#full-des");
-        String title = body.text("#comicName");
-        String cover = body.src("#Cover > img");
+        String intro = body.text("p.comic_deCon_d");
+        String title = body.text("div.comic_deCon > h1");
+        String cover = body.src("div.comic_i_img > img");
         if (cover.startsWith("//")) cover = "https:" + cover;
-        String author = body.text(".Introduct_Sub > .sub_r > .txtItme:eq(0)");
-        String update = body.text(".Introduct_Sub > .sub_r > .txtItme:eq(4)");
-        boolean status = isFinish(body.text(".Introduct_Sub > .sub_r > .txtItme:eq(2) > a:eq(3)"));
+        String author = body.text("ul.comic_deCon_liO > li.eq(0)");
+        String update = "";
+        boolean status = isFinish(body.text("ul.comic_deCon_liO > li.eq(1)"));
         comic.setInfo(title, cover, update, intro, author, status);
     }
 
@@ -112,9 +102,9 @@ public class MH50 extends MangaParser {
     public List<Chapter> parseChapter(String html) {
         List<Chapter> list = new LinkedList<>();
         Node body = new Node(html);
-        for (Node node : body.list(".chapter-warp > ul > li > a")) {
-            String title = node.text();
-            String path = StringUtils.split(node.href(), "/", 3);
+        for (Node node : body.list("div.zj_list_con > ul > li")) {
+            String title = node.attr("a", "title");
+            String path = StringUtils.split(node.href("a"), "/", 3);
             list.add(new Chapter(title, path));
         }
 
@@ -123,75 +113,64 @@ public class MH50 extends MangaParser {
 
     @Override
     public Request getImagesRequest(String cid, String path) {
-        String url = StringUtils.format("https://www.manhuadui.com/manhua/%s/%s", cid, path);
-        return new Request.Builder()
-                .addHeader("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 12_0 like Mac OS X) AppleWebKit/604.1.38 (KHTML, like Gecko) Version/12.0 Mobile/15A372 Safari/604.1")
-                .url(url)
-                .build();
+        String url = StringUtils.format("%s/manhua/%s/%s", website, cid, path);
+        return HttpUtils.getSimpleMobileRequest(url);
     }
 
-    private final String server[] = {
-//            "https://res.manhuachi.com/",
-//            "https://res.333dm.com/",
-//            "https://res02.333dm.com/"
-            "https://mhcdn.manhuazj.com/"
-    };
-
-    // ref: https://jueyue.iteye.com/blog/1830792
-    @Nullable
-    private String decryptAES(String value, String key, String ivs) {
-        try {
-            SecretKeySpec secretKey = new SecretKeySpec(key.getBytes(), "AES");
-            IvParameterSpec iv = new IvParameterSpec(ivs.getBytes());
-            Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
-            cipher.init(Cipher.DECRYPT_MODE, secretKey, iv);
-
-            byte[] code = Base64.decode(value, Base64.NO_WRAP);
-            return new String(cipher.doFinal(code));
-
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-
-        return null;
-    }
+    private final String[] server = {"https://mhcdn.manhuazj.com"};
 
     @Nullable
     private String decrypt(String code) {
-        String key = "123456781234567G";
-        String iv = "ABCDEF1G34123412";
+        String key = "KA58ZAQ321oobbG8";
+        String iv = "A1B2C3DEF1G321o8";
+        try {
+            return DecryptionUtils.aesDecrypt(code, key, iv);
+        } catch (Exception e) {
+            return null;
+        }
+    }
 
-        return decryptAES(code, key, iv);
+    //根据文件名获取图片url，参考common.js中getChapterImage函数
+    private String getImageUrlByKey(String key, String domain, String chapter) {
+        if (Pattern.matches("\\^https?://(images.dmzj.com|imgsmall.dmzj.com)/i", key)) {
+            try {
+                return domain + "/showImage.php?url=" + URLEncoder.encode(key, "utf-8");
+            } catch (Exception e) {
+                return null;
+            }
+        }
+        if (Pattern.matches("\\^[a-z]//i", key)) {
+            try {
+                return domain + "/showImage.php?url=" + URLEncoder.encode("https://images.dmzj.com/" + key, "utf-8");
+            } catch (Exception e) {
+                return null;
+            }
+        }
+        if (key.startsWith("http") || key.startsWith("ftp")) return key;
+        return domain + "/" + chapter + key;
     }
 
     @Override
     public List<ImageUrl> parseImages(String html) {
         List<ImageUrl> list = new LinkedList<>();
-        String arrayStringCode = StringUtils.match("var chapterImages =\\s*\"(.*?)\";", html, 1);
-        String arrayString = decrypt(arrayStringCode)
-                .replaceAll("\\[", "")
-                .replaceAll("\\]", "");
-        String imagePath = StringUtils.match("var chapterPath = ([\\s\\S]*?);", html, 1).replace("\"", "");
 
-        if (arrayString != null) {
-            try {
-                String[] array = arrayString.split(",");
-                for (int i = 0; i != array.length; ++i) {
-                    String imageUrl;
-                    if (array[i].startsWith("\"http")) {
-                        imagePath = "showImage.php?url=";
-                        imageUrl = this.server[0] + imagePath + array[i].replace("\"", "").replace("\\/", "/");
-                    }
-                    else if (array[i].startsWith("\"http")) {
-                        imageUrl = array[i].replace("\"", "");
-                    } else {
-                        imageUrl = this.server[0] + imagePath + array[i].replace("\"", "");
-                    }
-                    list.add(new ImageUrl(i + 1, imageUrl, false));
-                }
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
+        //该章节的所有图片url，aes加密
+        String arrayStringCode = decrypt(StringUtils.match("var chapterImages =[\\s\\n]*\"(.*?)\";", html, 1));
+        if (arrayStringCode == null) return list;
+        JSONArray imageList = JSONArray.parseArray(arrayStringCode);
+
+        //章节url，用于拼接最终的图片url
+        String chapterPath = StringUtils.match("var chapterPath = \"([\\s\\S]*?)\";", html, 1);
+
+        int imageListSize = imageList.size();
+        for (int i = 0; i != imageListSize; ++i) {
+            String key = imageList.getString(i);
+            String imageUrl = getImageUrlByKey(key, server[0], chapterPath);
+
+            if(imageUrl.indexOf("images.dmzj.com") >= 0)
+                imageUrl = "https://img01.eshanyao.com/showImage.php?url=" + imageUrl;
+
+            list.add(new ImageUrl(i + 1, imageUrl, false));
         }
 
         return list;
@@ -239,9 +218,9 @@ public class MH50 extends MangaParser {
                     .concat(args[CATEGORY_PROGRESS]).trim();
             String finalPath;
             if (path.isEmpty()) {
-                finalPath = StringUtils.format("https://m.manhuadui.com/list/");
+                finalPath = StringUtils.format("%s/list/", website);
             } else {
-                finalPath = StringUtils.format("https://m.manhuadui.com/list/%s/?page=%%d", path).replaceAll("\\s+", "-");
+                finalPath = StringUtils.format("%s/list/%s/?page=%%d", website, path).replaceAll("\\s+", "-");
             }
             return finalPath;
         }
@@ -400,7 +379,7 @@ public class MH50 extends MangaParser {
 
     @Override
     public Headers getHeader() {
-        return Headers.of("Referer", "https://m.manhuadui.com/");
+        return Headers.of("Referer", website);
     }
 
 }
